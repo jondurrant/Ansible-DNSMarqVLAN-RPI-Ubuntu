@@ -1,0 +1,100 @@
+---
+- name: Check required variables
+  fail: msg="Variable '{{ item }}' is not defined"
+  when: item not in vars
+  with_items: 
+    - vlan
+    - ip
+    
+- name: Set interface
+  set_fact:
+    interface: "eth0.{{ vlan }}"
+
+- name: Install vlan tools
+  become: true
+  ansible.builtin.package:
+    name: vlan
+    state: present
+    
+- name: Install net-tools 
+  become: true
+  ansible.builtin.package:
+    name: net-tools
+    state: present
+    
+    
+- name: "Check if interface exists: {{ interface }}"    
+  become: true
+  ansible.builtin.shell: "ip link show {{ interface }}"
+  ignore_errors: yes 
+  register: linkCheck  
+    
+- name: Add link
+  become: true
+  ansible.builtin.shell: "ip link add link eth0 name {{ interface }} type vlan id {{ vlan }}"
+  when: linkCheck.rc != 0
+ 
+ 
+- name: "Check existing link ip address: {{ interface }}"
+  become: true
+  ansible.builtin.shell: "ip addr show {{ interface }} | grep inet | head -1 | awk '{print $2}'"
+  register: linkIP 
+  
+
+- name: "Remove existing ip address: {{ interface }}"
+  become: true
+  ansible.builtin.shell: "ip addr del {{ linkIP.stdout }} dev {{ interface }}"
+  when: (linkCheck.rc == 0) and (ip |string not in linkIP.stdout)
+
+- name: Add IP
+  become: true
+  ansible.builtin.shell: "ip addr add {{ ip }}/24 dev {{ interface }}"
+  when: (ip |string not in linkIP.stdout)
+
+- name: Bring Up interface {{ interface }}
+  become: true
+  ansible.builtin.shell: "ip link set {{ interface }} up"
+
+
+
+- name: Persistem specification for {{ interface }}
+  set_fact:
+    netplan:
+      network:
+        version: 2
+        vlans: 
+          VLANID:
+            id: "{{ vlan | int }}"
+            link: "eth0"
+            addresses: "[{{ ip }}/24]"
+            
+           
+- name: Write Netplan
+  become: true
+  copy:
+    dest: "/etc/netplan/{{ interface}}.yaml"
+    owner: root
+    mode: '0600'
+    content: "{{ netplan | to_nice_yaml }}"
+  when: (ip |string not in linkIP.stdout)
+
+- name: "Rewrite VLANID in /etc/netplan/{{ interface}}.yaml"
+  become: true
+  ansible.builtin.replace:
+    path: "/etc/netplan/{{ interface}}.yaml"
+    regexp: "VLANID"
+    replace: "{{ interface }}" 
+  when: (ip |string not in linkIP.stdout)
+    
+- name: "Remove quotes from /etc/netplan/{{ interface}}.yaml"
+  become: true
+  ansible.builtin.replace:
+    path: "/etc/netplan/{{ interface}}.yaml"
+    regexp: "'"
+    replace: "" 
+  when: (ip |string not in linkIP.stdout)     
+
+    
+    
+    
+    

@@ -1,0 +1,198 @@
+---
+- name: Check required variables
+  fail: msg="Variable '{{ item }}' is not defined"
+  when: item not in vars
+  with_items: 
+    - interface
+    - hostsdir
+    - domain
+    - server
+    - user
+ 
+- name: Install dnsmasq
+  become: true
+  ansible.builtin.package:
+    name: dnsmasq
+    state: present 
+ 
+- name: Check dnsmasq config exists
+  stat:
+    path: "/etc/dnsmasq.conf"
+  register: dnsmasqConf
+
+- name: Mv dnsmasq.conf 
+  become: true
+  shell: mv /etc/dnsmasq.conf /etc/dnsmasq.old
+  when: dnsmasqConf.stat.exists == true 
+ 
+- name: Create Service Name
+  set_fact:
+    serviceName: "oracMultiDNS-{{ interface }}"
+    pidFile: "/run/dns-{{ interface }}.pid"
+    confFile: "/opt/oracMultiDNS/conf/{{ interface }}"
+    
+- name: Stop Service {{ serviceName }}
+  become: true
+  ignore_errors: yes
+  ansible.builtin.service:
+    name: "{{ serviceName }}"
+    state: stopped
+
+    
+- name: Create folder strucures - conf
+  become: true
+  ansible.builtin.file:
+    path: /opt/oracMultiDNS/conf
+    state: directory
+    mode: '0755'
+    owner: dnsmasq
+    
+- name: Create folder strucures - all 
+  become: true
+  ansible.builtin.file:
+    path: /opt/oracMultiDNS/all
+    state: directory
+    mode: '0755'
+    owner: dnsmasq
+    
+- name: Create folder strucures - bin
+  become: true
+  ansible.builtin.file:
+    path: /opt/oracMultiDNS/bin
+    state: directory
+    mode: '0755'
+    owner: dnsmasq
+    
+- name: Copy bin
+  become: true
+  ansible.builtin.copy:
+    src: dns.sh
+    dest: /opt/oracMultiDNS/bin/dns.sh
+    owner: dnsmasq
+    mode: '0755'
+    
+- name: Create all hosts file
+  become: true
+  ansible.builtin.file:
+    path: /opt/oracMultiDNS/all/hosts
+    state: touch
+    mode: '0755'
+    owner: dnsmasq
+    
+- name: Copy all hosts
+  become: true
+  ansible.builtin.copy:
+    src: hosts.all
+    dest: /opt/oracMultiDNS/all/hosts
+    owner: dnsmasq
+    mode: '0755'
+    
+    
+- name: Create folder strucures - {{ hostsdir }}
+  become: true
+  ansible.builtin.file:
+    path: "{{ hostsdir }}"
+    state: directory
+    mode: '0755'
+    owner: dnsmasq    
+ 
+- name: Create {{ hostsdir }} hosts file
+  become: true
+  ansible.builtin.file:
+    path: "{{ hostsdir }}/hosts"
+    state: touch
+    mode: '0755'
+    owner: dnsmasq 
+    
+- name: Copy {{ hostsdir }} hosts file
+  become: true
+  ansible.builtin.copy:
+    src: "hosts.{{ interface }}"
+    dest: "{{ hostsdir }}/hosts"
+    owner: dnsmasq
+    mode: '0755'
+    
+- name: "Get link ip address: {{ interface }}"
+  become: true
+  ansible.builtin.shell: "ip addr show {{ interface }} | grep inet | head -1 | awk '{split($2,a,\"/\");print a[1]}'"
+  register: linkIP 
+ 
+- name: "Add dns.home as {{ linkIP.stdout }}"
+  become: true
+  lineinfile:
+    path: "{{ hostsdir }}/hosts"
+    line: "{{ linkIP.stdout }} dns.home"
+    
+- name: Write config file for {{ interface }}
+  become: true
+  copy:
+    dest: "{{ confFile }}"
+    owner: dnsmasq
+    mode: '0755'
+    content: |
+      interface={{ interface }}
+      hostsdir={{ hostsdir }}
+      domain={{ domain }}
+      server={{ server }}
+      user={{ user }}
+      pidFile={{ pidFile }}
+      
+- name: Write the Service file - {{ serviceName }}
+  become: true
+  copy:
+    dest: "/etc/systemd/system/{{ serviceName }}.service"
+    owner: root
+    mode: '0600'
+    content: |
+      [Unit]
+      Description=DNSmasq on Interface {{ interface }}
+      
+      [Service]
+      PIDFile={{ pidFile }}
+      ExecStart=/opt/oracMultiDNS/bin/dns.sh {{ confFile }}
+      RemainAfterExit=yes
+      
+      [Install]
+      WantedBy=multi-user.target
+   
+- name: Disable systemd-resolved
+  become: true
+  ansible.builtin.service:
+    name: systemd-resolved
+    state: stopped
+    enabled: no   
+   
+- name: Disable named
+  become: true
+  ansible.builtin.service:
+    name: named
+    state: stopped
+    enabled: no  
+   
+- name: reload systemd
+  become: true
+  command: systemctl daemon-reload      
+      
+- name: Start Service {{ serviceName }}
+  become: true
+  ansible.builtin.service:
+    name: "{{ serviceName }}"
+    state: started
+    enabled: yes
+    
+- name: Config /etc/resolv.conf 
+  become: true
+  copy:
+    dest: /etc/resolv.conf
+    owner: root
+    mode: '0600'
+    content: |
+      nameserver 127.0.0.1
+      search {{ domain }} home
+    
+- name: UFW Allow DNS
+  become: true
+  community.general.ufw:
+    rule: allow
+    port: '53'
+    proto: any

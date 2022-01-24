@@ -1,0 +1,9 @@
+
+- hosts: DNS
+  gather_facts: true
+  roles:
+     - {role: OracJoinVLAN, vlan: "13", ip: "192.168.13.5" }
+     - {role: OracMultiDNS, interface: "eth0",    hostsdir: "/opt/oracMultiDNS/all",   domain: "home", server: "192.168.1.1", user: "dnsmasq"}
+     - {role: OracMultiDNS, interface: "eth0.13", hostsdir: "/opt/oracMultiDNS/np",    domain: "home", server: "192.168.1.1", user: "dnsmasq"}
+
+ 
